@@ -15,13 +15,30 @@
 
 /* Private defines -----------------------------------------------------------*/
 
+//#define SYMETRIC_PWM
+
+
+// comment this to let the PWM Open Loop Default value below be used (i.e. no manual adjust)
+//#define PWM_IS_MANUAL
+
+
 #define PWM_50PCNT  ( TIM2_PWM_PD / 2 )
-#define PWM_DC_RAMPUP  PWM_50PCNT // 52 // exp. determined
+
 #define PWM_MAX_LIMIT  (TIM2_PWM_PD - 1) // limitation of the manual adj. pot to set max PWM. 
 
-// if not manual define then value got from the manual pot setting
-#define PWM_NOT_MANUAL_DEF  PWM_OL_DEFAULT
+#define PWM_DC_RAMPUP  PWM_50PCNT // 52 // exp. determined
 
+
+
+// PWM DC handles differently in symetric PWM - try to limit current to 1.0 - 1.5A indicated on P/S w/ motor running
+#ifdef SYMETRIC_PWM
+  #define PWM_NOT_MANUAL_DEF  (PWM_50PCNT +  15  )
+
+#else
+
+  #define PWM_NOT_MANUAL_DEF  30//0x20 // experimentally determined value (using manual adjustment)
+
+#endif
 
 
 // see define of TIM2 PWM PD ... it set for 125uS @ clk 2Mhz
@@ -96,6 +113,10 @@ uint16_t _set_output(int8_t state0)
     if (state0 > 0)
     {
         pulse = global_uDC;
+    }
+    else if (state0 < 0)
+    {
+        pulse = TIM2_PWM_PD - global_uDC; // inverse pulse (for symetric PWM)
     }
     else
     {
@@ -264,6 +285,8 @@ void BLDC_ramp_update(void)
     }
 }
 
+void BLDC_Step_X(void);
+void bldc_move_X(void);
 /*
  * BLDC Update: handle the BLDC state 
  *      Off: nothing
@@ -287,7 +310,20 @@ void BLDC_Update(void)
     {
         // reset counter and step the BLDC state
         count = 0;
-        BLDC_Step();
+
+        if (BLDC_RAMPUP == BLDC_State)
+        {
+
+            BLDC_Step();
+        }
+        else
+        {
+#ifdef SYMETRIC_PWM
+            BLDC_Step_X();
+#else
+            BLDC_Step();
+#endif
+        }
     }
 
     switch (BLDC_State)
@@ -305,14 +341,22 @@ void BLDC_Update(void)
 #ifdef PWM_IS_MANUAL
 // doesn't need to set global uDC every time as it would be set once in the FSM
 // transition ramp->on ... but it doesn't hurt to assert it
-         PWM_Set_DC( Manual_uDC ) ;
+
+  #ifdef SYMETRIC_PWM
+// special sauce to set manual PWM in Symetric mode - map the pot range to upper 50% of dyty cycle (also need to increase potentiometer a little bit just like the manual DC)
+        PWM_Set_DC( PWM_50PCNT +  Manual_uDC / 2 );  // only set manual DC in ON state
+
+  #else
+        PWM_Set_DC( Manual_uDC ); // only time we would set the manual DC is in "ON" state
+  #endif
+
 #else
 //         PWM_Set_DC( PWM_NOT_MANUAL_DEF ) ;
 #endif
         break;
     case BLDC_RAMPUP:
 
-         PWM_Set_DC( PWM_DC_RAMPUP ) ;
+        PWM_Set_DC( PWM_DC_RAMPUP ) ;
 
         if (BLDC_OL_comm_tm > BLDC_OL_TM_HI_SPD) // state-transition trigger?
         {
@@ -350,16 +394,33 @@ void BLDC_Step(void)
     }
 }
 
+void BLDC_Step_X(void)
+{
+    bldc_step += 1;
+    bldc_step %= N_CSTEPS;
+
+    if (global_uDC > 0)
+    {
+        bldc_move_X();
+    }
+    else // motor drive output has been disabled
+    {
+        GPIOC->ODR &=  ~(1<<5);
+        GPIOC->ODR &=  ~(1<<7);
+        GPIOG->ODR &=  ~(1<<1);
+        PWM_set_outputs(0, 0, 0);
+    }
+}
+
 void bldc_move(void)
 {
- const int8_t foo = 99; 
+    const int8_t foo = 99;
 
 // /SD outputs on C5, C7, and G1
 // wait until switch time arrives (watching for voltage on the floating line to cross 0)
     switch(bldc_step)
     {
     default:
-
     case 0:
         GPIOC->ODR |=   (1<<5);
         GPIOC->ODR |=   (1<<7);      // LO
@@ -395,6 +456,54 @@ void bldc_move(void)
         GPIOC->ODR |=   (1<<7);      // LO
         GPIOG->ODR |=   (1<<1);
         PWM_set_outputs(0, 0, foo);
+        break;
+    }
+}
+
+void bldc_move_X(void)
+{
+    const int8_t foo = 99;
+
+// /SD outputs on C5, C7, and G1
+// wait until switch time arrives (watching for voltage on the floating line to cross 0)
+    switch(bldc_step)
+    {
+    default:
+    case 0:
+        GPIOC->ODR |=   (1<<5);
+        GPIOC->ODR |=   (1<<7);      // LO
+        GPIOG->ODR &=  ~(1<<1);
+        PWM_set_outputs(foo, -foo, 0);
+        break;
+    case 1:
+        GPIOC->ODR |=   (1<<5);
+        GPIOC->ODR &=  ~(1<<7);
+        GPIOG->ODR |=   (1<<1);      // LO
+        PWM_set_outputs(foo, 0, -foo);
+        break;
+    case 2:
+        GPIOC->ODR &=  ~(1<<5);
+        GPIOC->ODR |=   (1<<7);
+        GPIOG->ODR |=   (1<<1);      // LO
+        PWM_set_outputs(0, foo, -foo);
+        break;
+    case 3:
+        GPIOC->ODR |=   (1<<5);      // LO
+        GPIOC->ODR |=   (1<<7);
+        GPIOG->ODR &=  ~(1<<1);
+        PWM_set_outputs(-foo, foo, 0);
+        break;
+    case 4:
+        GPIOC->ODR |=   (1<<5);      // LO
+        GPIOC->ODR &=  ~(1<<7);
+        GPIOG->ODR |=   (1<<1);
+        PWM_set_outputs(-foo, 0, foo);
+        break;
+    case 5:
+        GPIOC->ODR &=  ~(1<<5);
+        GPIOC->ODR |=   (1<<7);      // LO
+        GPIOG->ODR |=   (1<<1);
+        PWM_set_outputs(0, -foo, foo);
         break;
     }
 }
