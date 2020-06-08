@@ -235,6 +235,12 @@ void ADC1_setup(void)
 
 /*
  * Timer 1 Setup
+ *
+ * TIM1 is configured to be fast enough to ramp the open-loop commutation
+ *   time. So the ramp speed from low to hi is swept in 
+ *   the time  ( ( OL_TM_LO_SPD - OL_TM_HI_SPD ) * TIM1_period)
+ *                 (256 - 40) * 1.24mS ->  0.221184 Seconds  total ramp time
+ *
  * from:
  *   http://www.emcu.it/STM8/STM8-Discovery/Tim1eTim4/TIM1eTIM4.html
  *
@@ -248,7 +254,14 @@ void ADC1_setup(void)
  *       0.0012 sec
 */
 
-#define RAMP_PRESCALER 2
+#ifdef BLDC_TIM1_TEST
+ #define RAMP_PRESCALER 2        //   (1/8Mhz) * 2 * 256 ->  0.000064 S
+#else
+// #define RAMP_PRESCALER 128  // 0.004096
+   #define RAMP_PRESCALER 32  //      (1/8Mhz) * 32 * 256 ->  0.001024 S     faster startup
+//   #define RAMP_PRESCALER 8  //     stalls 
+
+#endif
 
 void TIM1_setup(void)
 {
@@ -256,23 +269,13 @@ void TIM1_setup(void)
     TIM1_DeInit();
 
 //fCK_CNT = fCK_PSC/(PSCR[15:0]+1) 
-    TIM1_TimeBaseInit((5-1), TIM1_COUNTERMODE_DOWN, 23, 0);    //    .000060
-    TIM1_TimeBaseInit((4-1), TIM1_COUNTERMODE_DOWN, 23, 0);    //    .000048
-//    TIM1_TimeBaseInit((4-1), TIM1_COUNTERMODE_DOWN, 11, 0);    //    NG
-//    TIM1_TimeBaseInit((5-1), TIM1_COUNTERMODE_DOWN, 11, 0);    //    .000030
-
-// @8Mhz
-//  think the ISR is taking ~50 uS because of BLDC_Step()	
-    TIM1_TimeBaseInit((1), TIM1_COUNTERMODE_DOWN, 1599, 0);   //    0.000400 S
-    TIM1_TimeBaseInit((1), TIM1_COUNTERMODE_DOWN, 799, 0);    //    0.000200 S
-    TIM1_TimeBaseInit((1), TIM1_COUNTERMODE_DOWN, 399, 0);    //    0.000100 S
 
 #ifdef CLOCK_16
- TIM1_TimeBaseInit(( RAMP_PRESCALER-1 ), TIM1_COUNTERMODE_DOWN, 512 - 1, 0);    //    0.000064 S
+    TIM1_TimeBaseInit(( RAMP_PRESCALER-1 ), TIM1_COUNTERMODE_DOWN, 512 - 1, 0);
 #else
- TIM1_TimeBaseInit(( RAMP_PRESCALER-1 ), TIM1_COUNTERMODE_DOWN, 256 - 1, 0);    //    0.000064 S
+
+    TIM1_TimeBaseInit(( RAMP_PRESCALER-1 ), TIM1_COUNTERMODE_DOWN, 256 - 1, 0);
 #endif
-//    TIM1_TimeBaseInit((1), TIM1_COUNTERMODE_DOWN, 199, 0);    //  0.000050 S NFG ISR BLDC_Update overuns
 
     TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
     TIM1_Cmd(ENABLE);
@@ -293,7 +296,7 @@ void timer_config_task_rate(void)
 #ifdef CLOCK_16
     TIM4->ARR = (256 - 1);    // @16Mhz  Period = 2.1ms 
 #else
-    TIM4->ARR = (156 - 1);    // @8Mhz  Period = 2.4ms 
+    TIM4->ARR = (156 - 1);    // @8Mhz  Period = 2.4ms            ................................156 ... math ?????????
 #endif
     TIM4->IER |= TIM4_IER_UIE; // Enable Update Interrupt
     TIM4->CR1 |= TIM4_CR1_CEN; // Enable TIM4
@@ -301,27 +304,20 @@ void timer_config_task_rate(void)
 
 // Timers 2 3 & 5 are 16-bit general purpose timers
 /*
- *  Sets the open-loop commutation switching period.
+ *  Sets the commutation switching period.
  *  Input: [0:1023]   (input may be set from analog trim-pot for test/dev)
 
  * @2Mhz, fMASTER period ==  0.5uS
  *  Timer Step: 
  *    step = 1/2Mhz * prescaler = 0.0000005 * (2^5) = 0.000016 seconds 
-
- *  1/2Mhz = 0.0000005
- *  1 Count Time = 0.0000005 * (2^5) = 0.000016 Sec
- *    125 counts * 0.000016 -> 500Hz
- *   1014 counts * 0.000016 ->  60Hz
- *
- *  1016:    0.016256 measure 0.0165 sec. ( precision 0.5mS at this range)
- *    12:         210 uS
- *    11:   wth ???????????
  */
+ #define COMM_TIME_SCALAR 2   // need to use a scale factor as all available pre-scalara bits are used for 16-Mhz config.
+
 void timer_config_channel_time(uint16_t u_period)
 {
 // 0x02F0 experimental
     const uint16_t MAX_SWITCH_TIME = 0xffff; //  0x2f0;//  0x3F8 
-    const uint16_t MIN_SWITCH_TIME = 2 - 1; // 12; // note: I think is (n+1)
+    const uint16_t MIN_SWITCH_TIME = 2 - 1; // 12
 
     uint16_t period = u_period;
 
@@ -329,22 +325,21 @@ void timer_config_channel_time(uint16_t u_period)
     {
         period = MIN_SWITCH_TIME;  // protect against setting a 0 period
     }
-// TODO: remap this so the output period ranged accordingly (e.g. final range  [1:0x300] should be easy and suitable ???
+
     if (period > MAX_SWITCH_TIME) 
     {
         period = MAX_SWITCH_TIME; // lower limit 
     }
-//period = (4-1); // 64 uS
-
-// PSC==5 period==78    ->  1.25 mS
-// PSC==5 period==936   -> 15.0 mS
-// PSC==5 period=936+78=1014 -> 16.125 mS
 
 #ifdef CLOCK_16
-    TIM3->PSCR = 0x06; //  64 ......    @ 16Mhz -> 1 bit-time == 0.000016 Sec
+//#ifdef CLOCK_16
 #else
-    TIM3->PSCR = 0x07; // 128 ......    @  8Mhz -> 1 bit-time == 0.000016 Sec
 #endif
+
+// use the max prescaler 3-bits
+    TIM3->PSCR = 0x07; // 128 ......    @  8Mhz -> 1 bit-time == 0.000016 Sec
+                       //               @ 16Mhz -> 1 bit-time == 0.000008 Sec  (needs to double the counter0
+//#endif
 
 
     TIM3->ARRH = period >> 8;   // be sure to set byte ARRH first, see data sheet  

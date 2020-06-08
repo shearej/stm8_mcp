@@ -21,7 +21,8 @@
  */
 
 //#define CLOCK_16
-#define BLDC_TIM1_TEST
+//#define BLDC_TIM1_TEST
+
 
 // Using TIM2 prescale value of 1, so period TIM2 == period fMaster
 // @2Mhz, fMASTER period ==  0.5uS

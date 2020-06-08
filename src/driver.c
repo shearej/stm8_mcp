@@ -45,24 +45,39 @@
  * PS = 2 -> 128uS
  * PS = 4 -> 256uS   
  */
+
 #ifdef BLDC_TIM1_TEST
- #define RAMP_DIV  1
-#else
- #define RAMP_DIV 4
-#endif
- 
-#define BLDC_OL_TM_LO_SPD   (254 / RAMP_DIV ) // start of ramp
+
+// The commutation step time is  BLDC_OL_comm_tm * TIM1 period @ 64uS 
+// Allow the comm step time to have range [0:64]
+#define BLDC_TIME_SCALE    1    
+
+#define BLDC_OL_TM_LO_SPD  (64 * BLDC_TIME_SCALE) // start of ramp ... changed to a faster starting "speed" 
 
 // ten counts will speed up to about xxxx RPM (needs to be 2500 RPM or ~2.4mS
 //#define BLDC_OL_TM_HI_SPD    40  //  16uS * 40 * 6 -> 3.84mS
-#define BLDC_OL_TM_HI_SPD    (10 * RAMP_DIV)  //  64uS * 10 * 6 -> 3.84mS (~2600rpm) 
+#define BLDC_OL_TM_HI_SPD    (10 * BLDC_TIME_SCALE)  //  64uS * 10 * 6 -> 3.84mS (~2600rpm) 
 
 // manual adjustment of OL PWM DC ... limit (can get only to about 9 right now)
-#define BLDC_OL_TM_MANUAL_HI_LIM   6 
+#define BLDC_OL_TM_MANUAL_HI_LIM   (6 * BLDC_TIME_SCALE)
 
-// starting step-time for ramp-up 
-//#define RAMP_STEP_TIME0  (0x1000 / BLDC_OL_PS)
-#define RAMP_STEP_TIME0  (0x0100 )                  // shorten/lengthen ramp time
+#else
+
+// Needs a scale factor to use TIM3 effectively (all 3 TIM3 PS bits have already used)
+// The commutation step time is:
+//   BLDC_OL_comm_tm * BLDC_TIME_SCALE * TIM3 period @ 16uS 
+#define BLDC_TIME_SCALE  4            // 256 / 4 = 64    -> range [0:64]
+
+#define BLDC_OL_TM_LO_SPD  (64 * BLDC_TIME_SCALE) // start of ramp ... changed to a faster starting "speed" but it seems to start ok
+
+// ten counts will speed up to about xxxx RPM (needs to be 2500 RPM or ~2.4mS
+//#define BLDC_OL_TM_HI_SPD    40  //  16uS * 40 * 6 -> 3.84mS
+#define BLDC_OL_TM_HI_SPD    (10 * BLDC_TIME_SCALE)  //  64uS * 10 * 6 -> 3.84mS (~2600rpm) 
+
+// manual adjustment of OL PWM DC ... limit (can get only to about 9 right now)
+#define BLDC_OL_TM_MANUAL_HI_LIM   (7 * BLDC_TIME_SCALE)   // 23 is my limit ;)
+
+#endif
 
 
 /* Public variables  ---------------------------------------------------------*/
@@ -78,7 +93,7 @@ static uint16_t TIM2_pulse_0 ;
 static uint16_t TIM2_pulse_1 ;
 static uint16_t TIM2_pulse_2 ;
 
-static uint16_t Ramp_Step_Tm; // reduced x2 each time but can't start any slower
+
 /* static */ uint16_t global_uDC;
 static uint8_t bldc_step = 0;
 
@@ -264,13 +279,15 @@ void BLDC_Spd_inc()
 }
 
 
+#ifdef BLDC_TIM1_TEST
 
-#if 0 // #ifdef BLDC_TIM1_TEST
+#define RAMP_STEP_TIME0  (0x0100 )                  // shorten/lengthen ramp time
+
+static uint16_t Ramp_Step_Tm; // reduced x2 each time but can't start any slower
 
 void BLDC_ramp_update(void)
 {
     static const uint16_t RAMP_STEP_T1 = 0x0020; // step time at end of ramp
-
     static uint16_t ramp_step_tmr = 0;
 
     // on counter zero, decrement counter, start value divided by 2
@@ -287,35 +304,6 @@ void BLDC_ramp_update(void)
         // }
     }
 }
-
-#else
-
-// // should be 0.1 * 100 ... :(
-// #define SCALAR  10  //   100
-//#define K_PROP   1    //   0.1
-//#define K_PROP_X_SCALAR    ( SCALAR * K_PROP )    
-#define RAMP_SCALAR   32 
-
-void BLDC_ramp_update(void)
-{
-    static uint16_t ramp_step_tmr = 0;
-
-    if ( ramp_step_tmr < RAMP_SCALAR )
-    {
-        ramp_step_tmr += 1;
-    }
-    else
-    {
-        ramp_step_tmr = 0;
-
-        if (BLDC_OL_comm_tm >  BLDC_OL_TM_HI_SPD  )
-        {
-            BLDC_OL_comm_tm -= 1;
-
-//	BLDC_OL_comm_tm =  ( (BLDC_OL_comm_tm * 32) -  1 ) / 32  ;
-        }
-    }
-}
 #endif
 
 
@@ -323,6 +311,10 @@ void timer_config_channel_time(uint16_t u16period); // tmp
 
 /*
  * BLDC Update: handle the BLDC state 
+ *
+ *   Driven by TIM1 @ 1.024 mS
+ *   The rampup of BLDC_OL_Commutaion_time is handled in the RAMP state of the 
+ *   state macnhine:
  *      Off: nothing
  *      Rampup: get BLDC up to sync speed to est. comm. sync.
  *              Once the HI OL speed (frequency) is reached, then the idle speed 
@@ -338,11 +330,9 @@ void timer_config_channel_time(uint16_t u16period); // tmp
  */
 void BLDC_Update(void)
 {
-
-#ifndef BLDC_TIM1_TEST
+#if 1  // if ! MANUAL 
     timer_config_channel_time(BLDC_OL_comm_tm);
 #endif
-
 
     switch (BLDC_State)
     {
@@ -350,7 +340,10 @@ void BLDC_Update(void)
     case BLDC_OFF:
         // reset commutation timer and ramp-up counters ready for ramp-up
         BLDC_OL_comm_tm = BLDC_OL_TM_LO_SPD;
+
+#ifdef BLDC_TIM1_TEST
         Ramp_Step_Tm = RAMP_STEP_TIME0;
+#endif
         break;
 
     case BLDC_ON:
@@ -363,13 +356,19 @@ void BLDC_Update(void)
 //         PWM_Set_DC( PWM_NOT_MANUAL_DEF ) ;
 #endif
         break;
+
     case BLDC_RAMPUP:
 
          PWM_Set_DC( PWM_DC_RAMPUP ) ;
 
         if (BLDC_OL_comm_tm > BLDC_OL_TM_HI_SPD) // state-transition trigger?
         {
+#ifdef BLDC_TIM1_TEST
             BLDC_ramp_update();
+#else
+            BLDC_OL_comm_tm -= 1;  // TIM3 has been timed so that the ramp is realized by simple -=1 each timer period
+                                   // so the ramp rate is  16uS/TIM1_period w/ TIM1 @ 1.024 mS 
+#endif
         }
         else
         {
@@ -403,6 +402,9 @@ void BLDC_Step(void)
     }
 }
 
+/*
+ * in order to activate this at 30degree intervals, scale TIM3 appropriately
+ */
 void bldc_move(void)
 {
  const int8_t foo = 99; 
