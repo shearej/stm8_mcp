@@ -134,7 +134,7 @@ static uint16_t Ramp_Step_Tm; // reduced x2 each time but can't start any slower
 /* static */ uint16_t global_uDC;
 
 /* Private function prototypes -----------------------------------------------*/
-void PWM_Config_T1(void);
+void PWM_Config_T1(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_t state2);
 void PWM_Config(void);
 void bldc_move( uint8_t );
 
@@ -160,7 +160,7 @@ void PWM_Set_DC(uint16_t pwm_dc)
  * intermediate function for setting PWM with positive or negative polarity
  * Provides an "inverted" (complimentary) duty-cycle if [state0 < 0]
  */
-uint16_t _set_output( /* uint8_t chan, */ DC_PWM_STATE_t state0)
+uint16_t _set_output(  uint8_t chan, DC_PWM_STATE_t state0)
 {
     uint16_t pulse = PWM_0PCNT;
 
@@ -188,12 +188,12 @@ uint16_t _set_output( /* uint8_t chan, */ DC_PWM_STATE_t state0)
 
 void PWM_set_outputs(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_t state2)
 {
-    TIM2_pulse_0 = _set_output(state0);
-    TIM2_pulse_1 = _set_output(state1);
-    TIM2_pulse_2 = _set_output(state2);
+    TIM2_pulse_0 = _set_output(0, state0);
+    TIM2_pulse_1 = _set_output(1, state1);
+    TIM2_pulse_2 = _set_output(2, state2);
 
-    PWM_Config();
-    PWM_Config_T1();
+//    PWM_Config();
+    PWM_Config_T1(state0, state1, state2);
 }
 
 
@@ -224,7 +224,7 @@ void PWM_set_outputs(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_
   * - pulse width modulation frequency determined by the value of the TIM1_ARR register 
   * - duty cycle determined by the value of the TIM1_CCRi register
   */
-void PWM_Config_T1(void)
+void PWM_Config_T1(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_t state2)
 {
     const uint16_t Pulse_MAX = (TIM2_PWM_PD - 1);
     const uint16_t T1_Period = 250 /* TIMx_PWM_PD */ ;  // 16-bit counter
@@ -246,9 +246,16 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
     TIM1_TimeBaseInit(( TIM1_PRESCALER - 1 ), TIM1_COUNTERMODE_DOWN, T1_Period, 0);
 
     TIM1_CtrlPWMOutputs(ENABLE);
+
+    /* Enables TIM2 peripheral Preload register on ARR */
+//GN: probly     TIM1_ARRPreloadConfig(ENABLE);
+
+    TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
+    TIM1_Cmd(ENABLE);
+
 #endif
 
-    if (OC_1_pulse > 0 && OC_1_pulse < Pulse_MAX)
+    if (DC_PWM_PLUS == state0 /* MINUS? */)
     {
 #ifdef REINIT_PWM // bah ... have to do this every time
         TIM1_OC2Init( TIM1_OCMODE_PWM2,
@@ -266,14 +273,14 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
     else
     {
         TIM1_CCxCmd(TIM1_CHANNEL_2, DISABLE);
-// what If I am  floating sector?
-        if (OC_1_pulse >= Pulse_MAX)
+
+        if (DC_OUTP_HI == state0)
         {
             GPIOC->ODR |=  (1<<2);  // PC2 set HI
             GPIOC->DDR |=  (1<<2);
             GPIOC->CR1 |=  (1<<2);
         }
-        else
+        else // LO
         {
             GPIOC->ODR &=  ~(1<<2);  // PC2 set LO
             GPIOC->DDR |=  (1<<2);
@@ -281,7 +288,7 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
         }
     }
 
-    if (OC_2_pulse > 0 && OC_2_pulse < Pulse_MAX)
+    if (DC_PWM_PLUS == state1 /* MINUS? */)
     {
 #ifdef REINIT_PWM // bah ... have to do this every time
         TIM1_OC3Init( TIM1_OCMODE_PWM2,
@@ -300,7 +307,7 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
     {
         TIM1_CCxCmd(TIM1_CHANNEL_3, DISABLE);
 
-        if (OC_2_pulse >= Pulse_MAX)
+        if (DC_OUTP_HI == state1)//        if (OC_2_pulse >= Pulse_MAX)
         {
             GPIOC->ODR |=  (1<<3);  // PC3 set HI
             GPIOC->DDR |=  (1<<3);
@@ -314,7 +321,7 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
         }
     }
 
-    if (OC_3_pulse > 0 && OC_3_pulse < Pulse_MAX)
+    if (DC_PWM_PLUS == state2 /* MINUS? */)
     {
 #ifdef REINIT_PWM // bah ... have to do this every time
     TIM1_OC4Init(TIM1_OCMODE_PWM2, 
@@ -330,7 +337,7 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
     {
         TIM1_CCxCmd(TIM1_CHANNEL_4, DISABLE);
 
-        if (OC_3_pulse >= Pulse_MAX)
+        if (DC_OUTP_HI == state2)//        if (OC_3_pulse >= Pulse_MAX)
         {
             GPIOC->ODR |=  (1<<4);  // PC4 set HI
             GPIOC->DDR |=  (1<<4);
@@ -343,103 +350,8 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
             GPIOC->CR1 |=  (1<<4);
         }
     }
-
-
-
-    /* Enables TIM2 peripheral Preload register on ARR */
-//GN: probly     TIM1_ARRPreloadConfig(ENABLE);
-
-    TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
-    TIM1_Cmd(ENABLE);
 }
 
-/**
-  * @brief  .
-  * @par Parameters:
-  * None
-  * @retval void None
-  *   GN: from UM0834 PWM example
-  */
-void PWM_Config(void)
-{
-    const uint16_t TIM2_Pulse_MAX = (TIM2_PWM_PD - 1); // PWM_MAX_LIMIT 
-
-// todo: re-config only if delta d.c. > threshold e.g. 1
-    u8 OC_1_pulse = TIM2_pulse_0;
-    u8 OC_2_pulse = TIM2_pulse_1;
-    u8 OC_3_pulse = TIM2_pulse_2;
-
-    /* TIM2 Peripheral Configuration */
-    TIM2_DeInit();
-
-    TIM2_TimeBaseInit(TIM2_PRESCALER, ( TIM2_PWM_PD - 1 ) );
-
-    if (OC_1_pulse > 0 && OC_1_pulse < TIM2_Pulse_MAX)
-    {
-        /* Channel 1 PWM configuration */
-        TIM2_OC1Init(TIM2_OCMODE_PWM2, TIM2_OUTPUTSTATE_ENABLE, OC_1_pulse, TIM2_OCPOLARITY_LOW );
-        TIM2_OC1PreloadConfig(ENABLE);
-    }
-    else if (OC_1_pulse >= TIM2_Pulse_MAX)
-    {
-        GPIOD->ODR |=  (1<<4);  // PD4 set HI
-        GPIOD->DDR |=  (1<<4);
-        GPIOD->CR1 |=  (1<<4);
-    }
-    else
-    {
-        GPIOD->ODR &=  ~(1<<4);  // PD4 set LO
-        GPIOD->DDR |=  (1<<4);
-        GPIOD->CR1 |=  (1<<4);
-    }
-
-    if (OC_2_pulse > 0 && OC_2_pulse < TIM2_Pulse_MAX)
-    {
-        /* Channel 2 PWM configuration */
-        TIM2_OC2Init(TIM2_OCMODE_PWM2, TIM2_OUTPUTSTATE_ENABLE, OC_2_pulse, TIM2_OCPOLARITY_LOW );
-        TIM2_OC2PreloadConfig(ENABLE);
-    }
-    else if (OC_2_pulse >= TIM2_Pulse_MAX)
-    {
-        GPIOD->ODR |=  (1<<3);  // PD3 set HI
-        GPIOD->DDR |=  (1<<3);
-        GPIOD->CR1 |=  (1<<3);
-    }
-    else
-    {
-        GPIOD->ODR &=  ~(1<<3);  // PD3 set LO
-        GPIOD->DDR |=  (1<<3);
-        GPIOD->CR1 |=  (1<<3);
-    }
-
-    if (OC_3_pulse > 0 && OC_3_pulse < TIM2_Pulse_MAX)
-    {
-        /* Channel 3 PWM configuration */
-        TIM2_OC3Init(TIM2_OCMODE_PWM2, TIM2_OUTPUTSTATE_ENABLE, OC_3_pulse, TIM2_OCPOLARITY_LOW );
-        TIM2_OC3PreloadConfig(ENABLE);
-    }
-    else if ( OC_3_pulse >= TIM2_Pulse_MAX)
-    {
-        GPIOA->ODR |=  (1<<3);  // PA3 set HI
-        GPIOA->DDR |=  (1<<3);
-        GPIOA->CR1 |=  (1<<3);
-    }
-    else
-    {
-        GPIOA->ODR &=  ~(1<<3);  // PA3 set LO
-        GPIOA->DDR |=  (1<<3);
-        GPIOA->CR1 |=  (1<<3);
-    }
-
-    /* Enables TIM2 peripheral Preload register on ARR */
-    TIM2_ARRPreloadConfig(ENABLE);
-
-    /* Enable TIM2 */
-    TIM2_Cmd(ENABLE);
-
-
-    TIM2->IER |= TIM2_IER_UIE; // Enable Update Interrupt for use as hi-res timing reference
-}
 
 
 /*
@@ -489,18 +401,18 @@ void BLDC_Spd_inc()
 void TIM3_setup(uint16_t u16period); // tmp
 
 /*
- * BLDC Update: handle the BLDC state 
+ * BLDC Update: handle the BLDC state
  *      Off: nothing
  *      Rampup: get BLDC up to sync speed to est. comm. sync.
- *              Once the HI OL speed (frequency) is reached, then the idle speed 
+ *              Once the HI OL speed (frequency) is reached, then the idle speed
  *              must be established, i.e. controlling PWM DC to ? to achieve 2500RPM
  *              To do this closed loop, will need to internally time between the
  *              A/D or comparator input interrupts and adjust DC using e.g. Proportional
  *              control. When idle speed is reached, can transition to user control i.e. ON State
- *      On:  definition of ON state - user control (button inputs) has been enabled 
+ *      On:  definition of ON state - user control (button inputs) has been enabled
  *              1) ideally, does nothing - BLDC_Step triggered by A/D comparator event
- *              2) less ideal, has to check A/D or comp. result and do the comm. 
- *                 step ... but the resolution will be these discrete steps 
+ *              2) less ideal, has to check A/D or comp. result and do the comm.
+ *                 step ... but the resolution will be these discrete steps
  *                 (of TIM1 reference)
  */
 void BLDC_Update(void)
@@ -529,7 +441,7 @@ void BLDC_Update(void)
 
         if (BLDC_OL_comm_tm > BLDC_OL_TM_HI_SPD) // state-transition trigger?
         {
-            BLDC_OL_comm_tm -= BLDC_ONE_RAMP_UNIT; 
+            BLDC_OL_comm_tm -= BLDC_ONE_RAMP_UNIT;
         }
         else
         {
@@ -548,19 +460,27 @@ void BLDC_Update(void)
 }
 
 /*
- * drive /SD outputs and PWM channels
+ * TODO: schedule at 30degree intervals? (see TIM3)	????
+ Start a short timer on which ISR will then  trigger the A/D with proper timing  .... at 1/4 of the comm. cycle ?
+ So TIM3 would not stepp 6 times but 6x4 times? (4 times precision?)
  */
 void BLDC_Step(void)
 {
     const uint8_t N_CSTEPS = 6;
 
-    static uint8_t bldc_step = 0;
+    static COMMUTATION_SECTOR_t bldc_step = 0;
 
     bldc_step += 1;
     bldc_step %= N_CSTEPS;
 
     if (global_uDC > 0)
     {
+        /*
+            each comm. step, need to shutdown all PWM for the "hold off" period (flyback settling) ???
+               PWM_set_outputs(0, 0, 0);
+        */
+// TODO: set the PWM states (hi, lo plus minus) from look-up tables	???
+
         bldc_move( bldc_step );
     }
     else // motor drive output has been disabled
@@ -568,7 +488,7 @@ void BLDC_Step(void)
         GPIOC->ODR &=  ~(1<<5);
         GPIOC->ODR &=  ~(1<<7);
         GPIOG->ODR &=  ~(1<<1);
-        PWM_set_outputs(0, 0, 0);
+        PWM_set_outputs(DC_OUTP_OFF, DC_OUTP_OFF, DC_OUTP_OFF);
     }
 }
 
