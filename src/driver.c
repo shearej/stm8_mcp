@@ -3,7 +3,7 @@
   * @file driver.c
   * @brief support functions for the BLDC motor control
   * @author Neidermeier
-  * @version 
+  * @version
   * @date March-2020
   ******************************************************************************
   */
@@ -16,12 +16,7 @@
 /* Private defines -----------------------------------------------------------*/
 
 //#define PWM_IS_MANUAL
-
-#define LOWER_ARM_CHOPPING
-#define PWM_DC_PLUS     1
-#define PWM_DC_MINUS   -1
-#define PWM_GP_HI    0x7F // 127 positive max signed 8 integer
-#define PWM_GP_LO    0 // 0x80
+//#define LOWER_ARM_CHOPPING
 
 #define PWM_100PCNT    TIM2_PWM_PD
 #define PWM_50PCNT     ( PWM_100PCNT / 2 )
@@ -29,9 +24,6 @@
 #define PWM_0PCNT      0
 #define PWM_DC_RAMPUP  PWM_50PCNT // 52 // exp. determined
 
-
-//#ifdef SYMETRIC_PWM
-//  #define PWM_NOT_MANUAL_DEF  (PWM_50PCNT +  15  )
 
 #ifndef PWM_IS_MANUAL
 #define PWM_NOT_MANUAL_DEF  PWM_25PCNT //30 //0x20 // experimentally determined value (using manual adjustment)
@@ -49,12 +41,11 @@
 #endif
 
 
-
 /*
  * These constants are the number of timer counts (TIM3) to achieve a given
  *  commutation step period.
  * See TIM3 setup - base period is 0.000008 Seconds (8 uSecs)
- * For the theoretical 15000 RPM motor: 
+ * For the theoretical 15000 RPM motor:
  *   15000 / 60 = 250 rps
  *   cycles per sec = 250 * 6 = 1500
  *   1 cycle = 1/1500 = .000667 S
@@ -75,14 +66,56 @@
 // 1 cycle = 6 * 8uS * 50 = 0.0024 S
 #define BLDC_OL_TM_MANUAL_HI_LIM   64 // 58   // stalls at 56 ... stop at 64? ( 0x40? ) (I want to push the button and see the data at this speed w/o actually chaniging the CT)
 
-// any "speed" setting higher than HI_LIM would be by closed-loop control of 
-// commutation period (manual speed-control input by adjusting PWM  duty-cycle) 
+// any "speed" setting higher than HI_LIM would be by closed-loop control of
+// commutation period (manual speed-control input by adjusting PWM  duty-cycle)
 // The control loop will only have precision of 0.000008 S adjustment though (externally triggered comparator would be ideal )
 
 // 1 cycle = 6 * 8uS * 13 = 0.000624 S
 // 1 cycle = 6 * 8uS * 14 = 0.000672 S
 #define LUDICROUS_SPEED (13) // 15kRPM would be ~13.8 counts
 
+
+#define THREE_PHASES 3
+
+/* Private types -----------------------------------------------------------*/
+
+// enumerates the PWM state of each channel
+typedef enum DC_PWM_STATE
+{
+    DC_OUTP_OFF,
+    DC_PWM_PLUS,
+    DC_PWM_MINUS, // complimented i.e. (100% - DC)
+    DC_OUTP_HI,
+    DC_OUTP_LO,
+    DC_OUTP_FLOAT
+} DC_PWM_STATE_t;
+
+// enumerate 3 phases
+typedef enum THREE_PHASE_CHANNELS
+{
+    PHASE_A,
+    PHASE_B,
+    PHASE_C
+} THREE_PHASE_CHANNELS_t;
+
+//enumerate available PWM drive modes
+typedef enum PWM_MODE
+{
+    UPPER_ARM,
+    LOWER_ARM
+    // SYMETRICAL ... upper and lower arms driven (complementary) .. maybe no use for it
+} PWM_MODE_t;
+
+//enumerate commutation "sectors" (steps)
+typedef enum COMMUTATION_SECTOR
+{
+    SECTOR_1,
+    SECTOR_2,
+    SECTOR_3,
+    SECTOR_4,
+    SECTOR_5,
+    SECTOR_6
+} COMMUTATION_SECTOR_t;
 
 /* Public variables  ---------------------------------------------------------*/
 uint16_t BLDC_OL_comm_tm;   // could be private
@@ -127,49 +160,35 @@ void PWM_Set_DC(uint16_t pwm_dc)
  * intermediate function for setting PWM with positive or negative polarity
  * Provides an "inverted" (complimentary) duty-cycle if [state0 < 0]
  */
-uint16_t _set_output(int8_t s0)
+uint16_t _set_output(DC_PWM_STATE_t s0)
 {
     uint16_t pulse = PWM_0PCNT;
 
-    int8_t state0 = s0;
+    DC_PWM_STATE_t state0 = s0;
 
-#ifdef LOWER_ARM_CHOPPING // lower chopping hackro ... 
-// Invert the logic of the transistor drive, so as to essentially PWM the 
-// lower arm. Drive the upper-arm transistor ON (setting PWM to 100% DC) and 
-// setting the complement of the duty-cycle (1-DC) on the lower transistor
-    if (PWM_DC_PLUS == s0)
-    {
-        state0 = PWM_DC_MINUS;
-    }
-    else if (PWM_GP_LO == s0)
-    {
-        state0 = PWM_GP_HI;
-    }
-#endif
-
-    if ( PWM_GP_HI == state0)
+    if ( DC_OUTP_HI == state0)
     {
         pulse = PWM_100PCNT;
     }
-    else if ( PWM_GP_LO == state0)
+    else if ( DC_OUTP_LO == state0)
     {
         pulse = PWM_0PCNT;
     }
-    else if (state0 > 0)
+    else if (DC_PWM_PLUS == state0)
     {
         pulse = global_uDC;
     }
-    else if (state0 < 0)
+    else if (DC_PWM_MINUS == state0)
     {
         pulse = TIM2_PWM_PD - global_uDC; // inverse pulse
     }
-    //  else ... == 0 
+    //  else ... FLOAT ?
 
     return pulse;
 }
 
 
-void PWM_set_outputs(int8_t state0, int8_t state1, int8_t state2)
+void PWM_set_outputs(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_t state2)
 {
     TIM2_pulse_0 = _set_output(state0);
     TIM2_pulse_1 = _set_output(state1);
@@ -179,6 +198,22 @@ void PWM_set_outputs(int8_t state0, int8_t state1, int8_t state2)
     PWM_Config_T1();
 }
 
+
+/* 
+ * see Issue #6
+ * At the end of driven sectors (2 x 60 degree = 120 degrees driving duration),
+ * the PWM would be in an indeterminate state (hi or lo) depending on TIM1 duty-cycle
+ * and how the comm. switch timing (TIM3) happens to line up with it (if comm. switch 
+ * happends during on or off segment).. 
+ * Only by calling TIM1_DeInit() has it been possible to 
+ * assert the state of the PWM signal on the sector that is being transitioned ->FLOAT .
+ * But this has been a problem in that, the 2 consecutive driving sectors should not
+ * really be reconfigured unless there is a way to do it w/o causing a disruption during 
+ * the 120 driving semgnet which appears as voltage noise spike on the motor phase output
+ * If only I could  get the STM8 TIM setup right).
+ * Would need to only assert the phase being transitioned -> FLOAT. 
+ */
+#define REINIT_PWM
 
 /**
   * @brief  .
@@ -207,31 +242,17 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
 */
 
  // not sure how to assert off, as the pwM reconfig occurs on commutation time intervals which is asynchronous to the PWM clock, so if turning off PWM while the pulse happens to be ON ... ????
+#ifdef REINIT_PWM // bah ... have to do this every time
     TIM1_DeInit();
-
-#if 0
-    GPIOC->ODR &=  ~(1<<2);  // PC2 set LO
-    GPIOC->DDR |=  (1<<2);
-    GPIOC->CR1 |=  (1<<2);
-
-    GPIOC->ODR &=  ~(1<<3);  // PC3 set LO
-    GPIOC->DDR |=  (1<<3);
-    GPIOC->CR1 |=  (1<<3);
-
-    GPIOC->ODR &=  ~(1<<4);  // PC4 set LO
-    GPIOC->DDR |=  (1<<4);
-    GPIOC->CR1 |=  (1<<4);
-#endif
-/*
- todo: TIM1_SetCompare1() etc
-*/
 
     TIM1_TimeBaseInit(( TIM1_PRESCALER - 1 ), TIM1_COUNTERMODE_DOWN, T1_Period, 0);
 
+    TIM1_CtrlPWMOutputs(ENABLE);
+#endif
 
     if (OC_1_pulse > 0 && OC_1_pulse < Pulse_MAX)
     {
-        /* Channel 1 PWM configuration */
+#ifdef REINIT_PWM // bah ... have to do this every time
         TIM1_OC2Init( TIM1_OCMODE_PWM2,
                       TIM1_OUTPUTSTATE_ENABLE,
                       TIM1_OUTPUTNSTATE_ENABLE,
@@ -240,10 +261,14 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
                       TIM1_OCNPOLARITY_LOW,
                       TIM1_OCIDLESTATE_RESET,
                       TIM1_OCNIDLESTATE_RESET);
-        //GN: probbly  TIM2_OC2PreloadConfig(ENABLE);
+#endif
+        TIM1_CCxCmd(TIM1_CHANNEL_2, ENABLE);
+        TIM1_SetCompare2(OC_1_pulse);
     }
     else
     {
+        TIM1_CCxCmd(TIM1_CHANNEL_2, DISABLE);
+// what If I am  floating sector?
         if (OC_1_pulse >= Pulse_MAX)
         {
             GPIOC->ODR |=  (1<<2);  // PC2 set HI
@@ -257,11 +282,10 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
             GPIOC->CR1 |=  (1<<2);
         }
     }
-//        TIM1_SetCompare2(OC_1_pulse);
 
     if (OC_2_pulse > 0 && OC_2_pulse < Pulse_MAX)
     {
-        /* Channel 1 PWM configuration */
+#ifdef REINIT_PWM // bah ... have to do this every time
         TIM1_OC3Init( TIM1_OCMODE_PWM2,
                       TIM1_OUTPUTSTATE_ENABLE,
                       TIM1_OUTPUTNSTATE_ENABLE,
@@ -270,10 +294,14 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
                       TIM1_OCNPOLARITY_LOW,
                       TIM1_OCIDLESTATE_RESET,
                       TIM1_OCNIDLESTATE_RESET);
-        //GN: ?  TIM2_OC2PreloadConfig(ENABLE);
+#endif
+        TIM1_CCxCmd(TIM1_CHANNEL_3, ENABLE);
+        TIM1_SetCompare3(OC_2_pulse);
     }
     else
     {
+        TIM1_CCxCmd(TIM1_CHANNEL_3, DISABLE);
+
         if (OC_2_pulse >= Pulse_MAX)
         {
             GPIOC->ODR |=  (1<<3);  // PC3 set HI
@@ -287,21 +315,23 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
             GPIOC->CR1 |=  (1<<3);
         }
     }
-//        TIM1_SetCompare3(OC_2_pulse);
 
     if (OC_3_pulse > 0 && OC_3_pulse < Pulse_MAX)
     {
-        /* Channel 4 PWM configuration */
+#ifdef REINIT_PWM // bah ... have to do this every time
     TIM1_OC4Init(TIM1_OCMODE_PWM2, 
                   TIM1_OUTPUTSTATE_ENABLE, 
                   OC_3_pulse, 
                   TIM1_OCPOLARITY_LOW, 
                      TIM1_OCIDLESTATE_RESET );
-
-//GN: ?  TIM2_OC4PreloadConfig(ENABLE);
+#endif
+        TIM1_CCxCmd(TIM1_CHANNEL_4, ENABLE);
+        TIM1_SetCompare4(OC_3_pulse);
     }
     else
     {
+        TIM1_CCxCmd(TIM1_CHANNEL_4, DISABLE);
+
         if (OC_3_pulse >= Pulse_MAX)
         {
             GPIOC->ODR |=  (1<<4);  // PC4 set HI
@@ -315,10 +345,8 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
             GPIOC->CR1 |=  (1<<4);
         }
     }
-//        TIM1_SetCompare3(OC_2_pulse);
 
 
-    TIM1_CtrlPWMOutputs(ENABLE);
 
     /* Enables TIM2 peripheral Preload register on ARR */
 //GN: probly     TIM1_ARRPreloadConfig(ENABLE);
@@ -554,6 +582,17 @@ void BLDC_Step(void)
  */
 void bldc_move( uint8_t step )
 {
+/*
+    each comm. step, need to shutdown all PWM for the "hold off" period (flyback settling)
+*/
+//        PWM_set_outputs(0, 0, 0);
+
+// Start a short timer on which ISR will then  trigger the A/D with proper 
+//  timing  .... at 1/4 of the comm. cycle ?
+// So this TIM3 would not stepp 6 times but 6x4 times? (4 times precision?)
+// ....... (yes seems necessary (refer to SiLabs appnote)
+
+
 // /SD outputs on C5, C7, and G1
     switch( step )
     {
@@ -563,42 +602,42 @@ void bldc_move( uint8_t step )
         GPIOC->ODR |=   (1<<5);      // A+-+
         GPIOC->ODR |=   (1<<7);      // B---
         GPIOG->ODR &=  ~(1<<1);      // C.
-        PWM_set_outputs(PWM_DC_PLUS, PWM_GP_LO, 0);
+        PWM_set_outputs(DC_PWM_PLUS, DC_OUTP_LO, 0);
         break;
 
     case 1:
         GPIOC->ODR |=   (1<<5);	     // A+-+
         GPIOC->ODR &=  ~(1<<7);      // B.
         GPIOG->ODR |=   (1<<1);      // C---
-        PWM_set_outputs(PWM_DC_PLUS, 0, PWM_GP_LO);
+        PWM_set_outputs(DC_PWM_PLUS, 0, DC_OUTP_LO);
         break;
 
     case 2:
         GPIOC->ODR &=  ~(1<<5);      // A.
         GPIOC->ODR |=   (1<<7);      // B+-+
         GPIOG->ODR |=   (1<<1);      // C---
-        PWM_set_outputs(0, PWM_DC_PLUS, PWM_GP_LO);
+        PWM_set_outputs(0, DC_PWM_PLUS, DC_OUTP_LO);
         break;
 
     case 3:
         GPIOC->ODR |=   (1<<5);      // A---
         GPIOC->ODR |=   (1<<7);      // B+-+
         GPIOG->ODR &=  ~(1<<1);      // C.
-        PWM_set_outputs(PWM_GP_LO, PWM_DC_PLUS, 0);
+        PWM_set_outputs(DC_OUTP_LO, DC_PWM_PLUS, 0);
         break;
 
     case 4:
         GPIOC->ODR |=   (1<<5);      // A---
         GPIOC->ODR &=  ~(1<<7);      // B.
         GPIOG->ODR |=   (1<<1);      // C+-+
-        PWM_set_outputs(PWM_GP_LO, 0, PWM_DC_PLUS);
+        PWM_set_outputs(DC_OUTP_LO, 0, DC_PWM_PLUS);
         break;
 
     case 5:
         GPIOC->ODR &=  ~(1<<5);      // A.
         GPIOC->ODR |=   (1<<7);      // B---
         GPIOG->ODR |=   (1<<1);      // C+-+
-        PWM_set_outputs(0, PWM_GP_LO, PWM_DC_PLUS);
+        PWM_set_outputs(0, DC_OUTP_LO, DC_PWM_PLUS);
         break;
     }
 }
