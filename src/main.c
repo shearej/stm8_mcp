@@ -314,9 +314,9 @@ in the data buffer registers ADC_DBxR.
  *       0.0012 sec
 */
  #ifdef CLOCK_16
-   #define TIM1_PRESCALER 2  //    (1/16Mhz) * 2 * 256 -> 0.000125
+   #define TIM1_PRESCALER 8  //    (1/16Mhz) * 8 * 250 -> 0.000125 S
  #else
-   #define TIM1_PRESCALER 4  //    (1/8Mhz) * 4 * 256 ->  0.000125
+   #define TIM1_PRESCALER 4  //    (1/8Mhz)  * 4 * 250 -> 0.000125 S
  #endif
 
 
@@ -327,8 +327,45 @@ void TIM1_setup(void)
     CLK_PeripheralClockConfig (CLK_PERIPHERAL_TIMER1 , ENABLE); // put this with clocks setup 
 
     TIM1_DeInit();
+/*
+      todo: look into this?:
+    "For correct operation, preload registers must be enabled when the timer is in PWM mode. This
+    is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
 
+     TIM1_ARRPreloadConfig(ENABLE); ??
+*/
     TIM1_TimeBaseInit(( TIM1_PRESCALER - 1 ), TIM1_COUNTERMODE_DOWN, T1_Period, 0);
+
+        /* Channel 2 PWM configuration */
+    TIM1_OC2Init( TIM1_OCMODE_PWM2,
+                      TIM1_OUTPUTSTATE_ENABLE,
+                      TIM1_OUTPUTNSTATE_ENABLE,
+                      0,
+                      TIM1_OCPOLARITY_LOW,
+                      TIM1_OCNPOLARITY_LOW,
+                      TIM1_OCIDLESTATE_RESET,
+                      TIM1_OCNIDLESTATE_RESET);
+        //   TIM2_OC2PreloadConfig(ENABLE); ??
+
+    TIM1_OC3Init( TIM1_OCMODE_PWM2,
+                      TIM1_OUTPUTSTATE_ENABLE,
+                      TIM1_OUTPUTNSTATE_ENABLE,
+                      0,
+                      TIM1_OCPOLARITY_LOW,
+                      TIM1_OCNPOLARITY_LOW,
+                      TIM1_OCIDLESTATE_RESET,
+                      TIM1_OCNIDLESTATE_RESET);	
+ // ?  TIM2_OC3PreloadConfig(ENABLE);
+
+        /* Channel 4 PWM configuration */
+    TIM1_OC4Init(TIM1_OCMODE_PWM2, 
+                      TIM1_OUTPUTSTATE_ENABLE, 
+                      0, 
+                      TIM1_OCPOLARITY_LOW, 
+                      TIM1_OCIDLESTATE_RESET);
+// TIM2_OC4PreloadConfig(ENABLE); // ???
+
+    TIM1_CtrlPWMOutputs(ENABLE);
 
     TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
     TIM1_Cmd(ENABLE);
