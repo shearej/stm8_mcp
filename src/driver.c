@@ -160,29 +160,27 @@ void PWM_Set_DC(uint16_t pwm_dc)
  * intermediate function for setting PWM with positive or negative polarity
  * Provides an "inverted" (complimentary) duty-cycle if [state0 < 0]
  */
-uint16_t _set_output(DC_PWM_STATE_t s0)
+uint16_t _set_output( /* uint8_t chan, */ DC_PWM_STATE_t state0)
 {
     uint16_t pulse = PWM_0PCNT;
 
-    DC_PWM_STATE_t state0 = s0;
-
-    if ( DC_OUTP_HI == state0)
+    switch(state0)
     {
-        pulse = PWM_100PCNT;
-    }
-    else if ( DC_OUTP_LO == state0)
-    {
+    default:
+    case DC_OUTP_FLOAT:
+    case DC_OUTP_LO:
         pulse = PWM_0PCNT;
-    }
-    else if (DC_PWM_PLUS == state0)
-    {
+        break;
+    case DC_OUTP_HI:
+        pulse = PWM_100PCNT;
+        break;
+    case DC_PWM_PLUS:
         pulse = global_uDC;
-    }
-    else if (DC_PWM_MINUS == state0)
-    {
+        break;
+    case DC_PWM_MINUS: // complimented i.e. (100% - DC)
         pulse = TIM2_PWM_PD - global_uDC; // inverse pulse
+        break;
     }
-    //  else ... FLOAT ?
 
     return pulse;
 }
@@ -602,42 +600,42 @@ void bldc_move( uint8_t step )
         GPIOC->ODR |=   (1<<5);      // A+-+
         GPIOC->ODR |=   (1<<7);      // B---
         GPIOG->ODR &=  ~(1<<1);      // C.
-        PWM_set_outputs(DC_PWM_PLUS, DC_OUTP_LO, 0);
+        PWM_set_outputs(DC_PWM_PLUS, DC_OUTP_LO, DC_OUTP_FLOAT);
         break;
 
     case 1:
         GPIOC->ODR |=   (1<<5);	     // A+-+
         GPIOC->ODR &=  ~(1<<7);      // B.
         GPIOG->ODR |=   (1<<1);      // C---
-        PWM_set_outputs(DC_PWM_PLUS, 0, DC_OUTP_LO);
+        PWM_set_outputs(DC_PWM_PLUS, DC_OUTP_FLOAT, DC_OUTP_LO);
         break;
 
     case 2:
         GPIOC->ODR &=  ~(1<<5);      // A.
         GPIOC->ODR |=   (1<<7);      // B+-+
         GPIOG->ODR |=   (1<<1);      // C---
-        PWM_set_outputs(0, DC_PWM_PLUS, DC_OUTP_LO);
+        PWM_set_outputs(DC_OUTP_FLOAT, DC_PWM_PLUS, DC_OUTP_LO);
         break;
 
     case 3:
         GPIOC->ODR |=   (1<<5);      // A---
         GPIOC->ODR |=   (1<<7);      // B+-+
         GPIOG->ODR &=  ~(1<<1);      // C.
-        PWM_set_outputs(DC_OUTP_LO, DC_PWM_PLUS, 0);
+        PWM_set_outputs(DC_OUTP_LO, DC_PWM_PLUS, DC_OUTP_FLOAT);
         break;
 
     case 4:
         GPIOC->ODR |=   (1<<5);      // A---
         GPIOC->ODR &=  ~(1<<7);      // B.
         GPIOG->ODR |=   (1<<1);      // C+-+
-        PWM_set_outputs(DC_OUTP_LO, 0, DC_PWM_PLUS);
+        PWM_set_outputs(DC_OUTP_LO, DC_OUTP_FLOAT, DC_PWM_PLUS);
         break;
 
     case 5:
         GPIOC->ODR &=  ~(1<<5);      // A.
         GPIOC->ODR |=   (1<<7);      // B---
         GPIOG->ODR |=   (1<<1);      // C+-+
-        PWM_set_outputs(0, DC_OUTP_LO, DC_PWM_PLUS);
+        PWM_set_outputs(DC_OUTP_FLOAT, DC_OUTP_LO, DC_PWM_PLUS);
         break;
     }
 }
