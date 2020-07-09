@@ -24,8 +24,6 @@
 #include "parameter.h" //  app defines
 
 
-// hack, temp
-extern uint16_t BLDC_OL_comm_tm;
 
 
 /** @addtogroup I2C_EEPROM

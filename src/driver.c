@@ -211,7 +211,6 @@ void PWM_set_outputs(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_
  * If only I could  get the STM8 TIM setup right).
  * Would need to only assert the phase being transitioned -> FLOAT. 
  */
-#define REINIT_PWM
 
 /**
   * @brief  .
@@ -240,33 +239,14 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
 */
 
  // not sure how to assert off, as the pwM reconfig occurs on commutation time intervals which is asynchronous to the PWM clock, so if turning off PWM while the pulse happens to be ON ... ????
-#ifdef REINIT_PWM // bah ... have to do this every time
-    TIM1_DeInit();
 
-    TIM1_TimeBaseInit(( TIM1_PRESCALER - 1 ), TIM1_COUNTERMODE_DOWN, T1_Period, 0);
+    TIM1_Cmd(DISABLE); // maybe? (TIM1->CR1)  ........ YES
+    TIM1_SetCounter(0); // maybe? YES
+    TIM1_CtrlPWMOutputs(DISABLE); // maybe?  (TIM1->BKR) ...... //          definately likes this!!!!!!!!!!!!!!
 
-    TIM1_CtrlPWMOutputs(ENABLE);
-
-    /* Enables TIM2 peripheral Preload register on ARR */
-//GN: probly     TIM1_ARRPreloadConfig(ENABLE);
-
-    TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
-    TIM1_Cmd(ENABLE);
-
-#endif
 
     if (DC_PWM_PLUS == state0 /* MINUS? */)
     {
-#ifdef REINIT_PWM // bah ... have to do this every time
-        TIM1_OC2Init( TIM1_OCMODE_PWM2,
-                      TIM1_OUTPUTSTATE_ENABLE,
-                      TIM1_OUTPUTNSTATE_ENABLE,
-                      OC_1_pulse,
-                      TIM1_OCPOLARITY_LOW,
-                      TIM1_OCNPOLARITY_LOW,
-                      TIM1_OCIDLESTATE_RESET,
-                      TIM1_OCNIDLESTATE_RESET);
-#endif
         TIM1_CCxCmd(TIM1_CHANNEL_2, ENABLE);
         TIM1_SetCompare2(OC_1_pulse);
     }
@@ -290,16 +270,6 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
 
     if (DC_PWM_PLUS == state1 /* MINUS? */)
     {
-#ifdef REINIT_PWM // bah ... have to do this every time
-        TIM1_OC3Init( TIM1_OCMODE_PWM2,
-                      TIM1_OUTPUTSTATE_ENABLE,
-                      TIM1_OUTPUTNSTATE_ENABLE,
-                      OC_2_pulse,
-                      TIM1_OCPOLARITY_LOW,
-                      TIM1_OCNPOLARITY_LOW,
-                      TIM1_OCIDLESTATE_RESET,
-                      TIM1_OCNIDLESTATE_RESET);
-#endif
         TIM1_CCxCmd(TIM1_CHANNEL_3, ENABLE);
         TIM1_SetCompare3(OC_2_pulse);
     }
@@ -323,13 +293,6 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
 
     if (DC_PWM_PLUS == state2 /* MINUS? */)
     {
-#ifdef REINIT_PWM // bah ... have to do this every time
-    TIM1_OC4Init(TIM1_OCMODE_PWM2, 
-                  TIM1_OUTPUTSTATE_ENABLE, 
-                  OC_3_pulse, 
-                  TIM1_OCPOLARITY_LOW, 
-                     TIM1_OCIDLESTATE_RESET );
-#endif
         TIM1_CCxCmd(TIM1_CHANNEL_4, ENABLE);
         TIM1_SetCompare4(OC_3_pulse);
     }
@@ -350,6 +313,9 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
             GPIOC->CR1 |=  (1<<4);
         }
     }
+
+    TIM1_Cmd(ENABLE); // maybe?  definately!
+    TIM1_CtrlPWMOutputs(ENABLE); //          definately likes this!!!!!!!!!!!!!!
 }
 
 
