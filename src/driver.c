@@ -29,16 +29,6 @@
 #define PWM_NOT_MANUAL_DEF  PWM_25PCNT //30 //0x20 // experimentally determined value (using manual adjustment)
 #endif
 
-// see define of TIM2 PWM PD ... it set for 8kHz (125uS)
-#ifdef CLOCK_16
-//  (1/16Mhz) * 2 * 250 -> 0.000125 S
- #define TIM1_PRESCALER  8
- #define TIM2_PRESCALER  TIM2_PRESCALER_8
-#else
-//  (1/8Mhz) * 4 * 250 ->  0.000125 S
- #define TIM1_PRESCALER  4
- #define TIM2_PRESCALER  TIM2_PRESCALER_4
-#endif
 
 
 /*
@@ -126,17 +116,12 @@ BLDC_STATE_T BLDC_State;
 
 
 /* Private variables ---------------------------------------------------------*/
-static uint16_t TIM2_pulse_0 ;
-static uint16_t TIM2_pulse_1 ;
-static uint16_t TIM2_pulse_2 ;
 
 static uint16_t Ramp_Step_Tm; // reduced x2 each time but can't start any slower
 /* static */ uint16_t global_uDC;
 
 /* Private function prototypes -----------------------------------------------*/
-void PWM_Config_T1(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_t state2);
-void PWM_Config(void);
-void bldc_move( uint8_t );
+void bldc_move( COMMUTATION_SECTOR_t );
 
 /* Private functions ---------------------------------------------------------*/
 
@@ -160,7 +145,7 @@ void PWM_Set_DC(uint16_t pwm_dc)
  * intermediate function for setting PWM with positive or negative polarity
  * Provides an "inverted" (complimentary) duty-cycle if [state0 < 0]
  */
-uint16_t _set_output(  uint8_t chan, DC_PWM_STATE_t state0)
+uint16_t _set_output(uint8_t chan, DC_PWM_STATE_t state0)
 {
     uint16_t pulse = PWM_0PCNT;
 
@@ -185,16 +170,6 @@ uint16_t _set_output(  uint8_t chan, DC_PWM_STATE_t state0)
     return pulse;
 }
 
-
-void PWM_set_outputs(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_t state2)
-{
-    TIM2_pulse_0 = _set_output(0, state0);
-    TIM2_pulse_1 = _set_output(1, state1);
-    TIM2_pulse_2 = _set_output(2, state2);
-
-//    PWM_Config();
-    PWM_Config_T1(state0, state1, state2);
-}
 
 
 /* 
@@ -223,23 +198,16 @@ void PWM_set_outputs(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_
   * - pulse width modulation frequency determined by the value of the TIM1_ARR register 
   * - duty cycle determined by the value of the TIM1_CCRi register
   */
-void PWM_Config_T1(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_t state2)
+void PWM_set_outputs(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_t state2)
 {
-    const uint16_t Pulse_MAX = (TIM2_PWM_PD - 1);
-    const uint16_t T1_Period = 250 /* TIMx_PWM_PD */ ;  // 16-bit counter
-
-// todo: re-config only if delta d.c. > threshold e.g. 1
-    u8 OC_1_pulse = TIM2_pulse_0;
-    u8 OC_2_pulse = TIM2_pulse_1;
-    u8 OC_3_pulse = TIM2_pulse_2;
-
 /* todo: look into this?:
 "For correct operation, preload registers must be enabled when the timer is in PWM mode. This
 is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
 */
-
- // not sure how to assert off, as the pwM reconfig occurs on commutation time intervals which is asynchronous to the PWM clock, so if turning off PWM while the pulse happens to be ON ... ????
-
+/*
+ *  assert some config bits in the Timer1 peripheral (see "TIM1_Deinit()" ) before setting
+ * up the individual channels. This is fussy, it can mess up the back-EMF part of the phase voltage!
+ */
     TIM1_Cmd(DISABLE); // maybe? (TIM1->CR1)  ........ YES
     TIM1_SetCounter(0); // maybe? YES
     TIM1_CtrlPWMOutputs(DISABLE); // maybe?  (TIM1->BKR) ...... //          definately likes this!!!!!!!!!!!!!!
@@ -248,7 +216,7 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
     if (DC_PWM_PLUS == state0 /* MINUS? */)
     {
         TIM1_CCxCmd(TIM1_CHANNEL_2, ENABLE);
-        TIM1_SetCompare2(OC_1_pulse);
+        TIM1_SetCompare2(_set_output(0, state0));
     }
     else
     {
@@ -271,13 +239,13 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
     if (DC_PWM_PLUS == state1 /* MINUS? */)
     {
         TIM1_CCxCmd(TIM1_CHANNEL_3, ENABLE);
-        TIM1_SetCompare3(OC_2_pulse);
+        TIM1_SetCompare3(_set_output(1, state1));
     }
     else
     {
         TIM1_CCxCmd(TIM1_CHANNEL_3, DISABLE);
 
-        if (DC_OUTP_HI == state1)//        if (OC_2_pulse >= Pulse_MAX)
+        if (DC_OUTP_HI == state1)
         {
             GPIOC->ODR |=  (1<<3);  // PC3 set HI
             GPIOC->DDR |=  (1<<3);
@@ -294,13 +262,13 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
     if (DC_PWM_PLUS == state2 /* MINUS? */)
     {
         TIM1_CCxCmd(TIM1_CHANNEL_4, ENABLE);
-        TIM1_SetCompare4(OC_3_pulse);
+        TIM1_SetCompare4(_set_output(2, state2));
     }
     else
     {
         TIM1_CCxCmd(TIM1_CHANNEL_4, DISABLE);
 
-        if (DC_OUTP_HI == state2)//        if (OC_3_pulse >= Pulse_MAX)
+        if (DC_OUTP_HI == state2)
         {
             GPIOC->ODR |=  (1<<4);  // PC4 set HI
             GPIOC->DDR |=  (1<<4);
@@ -314,8 +282,9 @@ is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
         }
     }
 
-    TIM1_Cmd(ENABLE); // maybe?  definately!
-    TIM1_CtrlPWMOutputs(ENABLE); //          definately likes this!!!!!!!!!!!!!!
+// counterparts to Disable commands above
+    TIM1_Cmd(ENABLE);
+    TIM1_CtrlPWMOutputs(ENABLE);
 }
 
 
@@ -464,7 +433,7 @@ void BLDC_Step(void)
  * BUG? if PWM pulse is on at the step time to transition to floating, the PWM 
  * pulse is not turned off with good timing as the voltage just bleeds off then
  */
-void bldc_move( uint8_t step )
+void bldc_move(COMMUTATION_SECTOR_t step )
 {
 /*
     each comm. step, need to shutdown all PWM for the "hold off" period (flyback settling)
@@ -482,7 +451,7 @@ void bldc_move( uint8_t step )
     {
     default:
 
-    case 0:
+    case 0: // SECTOR_1 etc.
         GPIOC->ODR |=   (1<<5);      // A+-+
         GPIOC->ODR |=   (1<<7);      // B---
         GPIOG->ODR &=  ~(1<<1);      // C.
