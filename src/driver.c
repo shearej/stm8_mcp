@@ -77,7 +77,8 @@ typedef enum DC_PWM_STATE
     DC_PWM_MINUS, // complimented i.e. (100% - DC)
     DC_OUTP_HI,
     DC_OUTP_LO,
-    DC_OUTP_FLOAT
+    DC_OUTP_FLOAT,
+    DC_NONE
 } DC_PWM_STATE_t;
 
 // enumerate 3 phases
@@ -170,21 +171,30 @@ uint16_t _set_output(uint8_t chan, DC_PWM_STATE_t state0)
     return pulse;
 }
 
+/*
+ * crude
+ */
+void delay(int time)
+{
+    int d;
+    for (d = 0 ; d < time; d++)
+    {
+        nop();
+    }
+}
 
 
-/* 
+/*
  * see Issue #6
  * At the end of driven sectors (2 x 60 degree = 120 degrees driving duration),
  * the PWM would be in an indeterminate state (hi or lo) depending on TIM1 duty-cycle
- * and how the comm. switch timing (TIM3) happens to line up with it (if comm. switch 
- * happends during on or off segment).. 
- * Only by calling TIM1_DeInit() has it been possible to 
+ * and how the comm. switch timing (TIM3) happens to line up with it (if comm. switch
+ * happends during on or off segment)..
+ * Only by calling TIM1_DeInit() has it been possible to
  * assert the state of the PWM signal on the sector that is being transitioned ->FLOAT .
  * But this has been a problem in that, the 2 consecutive driving sectors should not
- * really be reconfigured unless there is a way to do it w/o causing a disruption during 
+ * really be reconfigured unless there is a way to do it w/o causing a disruption during
  * the 120 driving semgnet which appears as voltage noise spike on the motor phase output
- * If only I could  get the STM8 TIM setup right).
- * Would need to only assert the phase being transitioned -> FLOAT. 
  */
 
 /**
@@ -194,97 +204,183 @@ uint16_t _set_output(uint8_t chan, DC_PWM_STATE_t state0)
   * @retval void None
   *   reference:
   *    http://embedded-lab.com/blog/starting-stm8-microcontrollers/21/
+  *    - pulse width modulation frequency determined by the value of the TIM1_ARR register
+  *    - duty cycle determined by the value of the TIM1_CCRi register
   *
-  * - pulse width modulation frequency determined by the value of the TIM1_ARR register 
-  * - duty cycle determined by the value of the TIM1_CCRi register
+  *    "120° Square-Wave Commutation for Brushless DC Motors" (Toshiba Electronic)
+  *
+  * PWM is carefully disabled and then to assert the state of the output pins. 
+  * This can mess with back-EMF component of phase voltage. 
+
+  * First: shutoff PWM (before setting any of the new FET states) to ensure PWM 
+  *  leg is turned off and flyback-diode of non-PWM conducts flyback current("demagnization time".)
+  *
+  *  The way it's described in Toshiba AN, as if the PWMd leg turns off, 
+  *  the (non-PWM) also remains off, and flyback-diode becomes active.
+  *  Does IR2104 dead-time account for this ?:
+  *
+  * Second: assert /SD ==OFF  of (only!) the PWMd FET - to ensure that flyback 
+  *  diode is complete (de-energizing the coil that is now being transitioned 
+  *  to float). This seems to be the only way to ensure IR2104 set both switch non-conducting.
   */
 void PWM_set_outputs(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_t state2)
 {
-/* todo: look into this?:
-"For correct operation, preload registers must be enabled when the timer is in PWM mode. This
-is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
-*/
-/*
- *  assert some config bits in the Timer1 peripheral (see "TIM1_Deinit()" ) before setting
- * up the individual channels. This is fussy, it can mess up the back-EMF part of the phase voltage!
- */
+    /* todo: look into this?:
+    "For correct operation, preload registers must be enabled when the timer is in PWM mode. This
+    is not mandatory in one-pulse mode (OPM bit set in TIM1_CR1 register)."
+    */
+
+    /*
+     * disable PWM channels in order to assert the PWM timer channels and set 
+     * the GPIO pin config to non-PWM state (OFF, for upper-arm chopping). 
+     * Complete de-Init and re-initialization of Timer 1 doesn't seem necessary,
+     * and ideally, to not to disrupt the PWM signal on the 
+     * driven phase (which continues for 2 "sectors" (120 electrical degrees).
+    */
+    TIM1_CCxCmd(TIM1_CHANNEL_2, DISABLE);
+    TIM1_CCxCmd(TIM1_CHANNEL_3, DISABLE);
+    TIM1_CCxCmd(TIM1_CHANNEL_4, DISABLE);
+
     TIM1_Cmd(DISABLE); // maybe? (TIM1->CR1)  ........ YES
     TIM1_SetCounter(0); // maybe? YES
-    TIM1_CtrlPWMOutputs(DISABLE); // maybe?  (TIM1->BKR) ...... //          definately likes this!!!!!!!!!!!!!!
+    TIM1_CtrlPWMOutputs(DISABLE); // maybe?  (TIM1->BKR) ...... definately
 
+// mark the start of commutation trigger
+#if 1 //
+    GPIOG->ODR |=  (1<<0); // tmp test
+#endif
 
-    if (DC_PWM_PLUS == state0 /* MINUS? */)
+    /*
+     * needs to individually set the driven phase to float  (otherwise it could 
+     * be integrated into the state logic block below ... )
+     */
+    if (DC_OUTP_FLOAT == state0)
     {
-        TIM1_CCxCmd(TIM1_CHANNEL_2, ENABLE);
-        TIM1_SetCompare2(_set_output(0, state0));
+        // set /SD A OFF (other two legs set /SD enabled)
+        GPIOC->ODR &=  ~(1<<5);      // A.
     }
-    else
+    else if (DC_OUTP_FLOAT == state1)
     {
-        TIM1_CCxCmd(TIM1_CHANNEL_2, DISABLE);
-
-        if (DC_OUTP_HI == state0)
-        {
-            GPIOC->ODR |=  (1<<2);  // PC2 set HI
-            GPIOC->DDR |=  (1<<2);
-            GPIOC->CR1 |=  (1<<2);
-        }
-        else // LO
-        {
-            GPIOC->ODR &=  ~(1<<2);  // PC2 set LO
-            GPIOC->DDR |=  (1<<2);
-            GPIOC->CR1 |=  (1<<2);
-        }
+        // set /SD B OFF (other two legs set /SD enabled)
+        GPIOC->ODR &=   ~(1<<7);     // B
+    }
+    else if (DC_OUTP_FLOAT == state2)
+    {
+        // set /SD C OFF (other two legs set /SD enabled)
+        GPIOG->ODR &=   ~(1<<1);     // C
     }
 
-    if (DC_PWM_PLUS == state1 /* MINUS? */)
-    {
-        TIM1_CCxCmd(TIM1_CHANNEL_3, ENABLE);
-        TIM1_SetCompare3(_set_output(1, state1));
-    }
-    else
-    {
-        TIM1_CCxCmd(TIM1_CHANNEL_3, DISABLE);
+// short delay, seems to benefit from delay BEFORE asserting the drivers to LOW
+#if 1
+//    delay(15); // ng  (about 25 uS)
+    delay(20); // ok  (about 35 uS)
+#endif
 
-        if (DC_OUTP_HI == state1)
+#if 1
+    GPIOG->ODR &= ~(1<<0); // tmp test
+#endif
+
+/*
+ * assert output channel pins to off doesn't seem to care if is here or after 
+ * the /SD->off transition ... here it useful part of the demag-delay before re-config PWM
+ */
+    GPIOC->ODR &=  ~(1<<2);  // PC2 set LO
+    GPIOC->DDR |=  (1<<2);
+    GPIOC->CR1 |=  (1<<2);
+
+    GPIOC->ODR &=  ~(1<<3);  // PC3 set LO
+    GPIOC->DDR |=  (1<<3);
+    GPIOC->CR1 |=  (1<<3);
+
+    GPIOC->ODR &=  ~(1<<4);  // PC4 set LO
+    GPIOC->DDR |=  (1<<4);
+    GPIOC->CR1 |=  (1<<4);
+
+
+    if (DC_OUTP_OFF != state0)
+    {
+        if (DC_OUTP_FLOAT != state0)
         {
-            GPIOC->ODR |=  (1<<3);  // PC3 set HI
-            GPIOC->DDR |=  (1<<3);
-            GPIOC->CR1 |=  (1<<3);
+            GPIOC->ODR |=  (1<<5);      // set /SD A On
+
+            if (DC_PWM_PLUS == state0 /* MINUS? */)
+            {
+                TIM1_SetCompare2(_set_output(0, state0));
+                TIM1_CCxCmd(TIM1_CHANNEL_2, ENABLE);
+                // set /SD A ON
+//        GPIOC->ODR |=  (1<<5);      // A.
+            }
+            else if (DC_OUTP_LO == state0)
+            {
+// let the Timer PWM channel remain disabled, PC2 is LO, /SD.A is ON
+            }
         }
         else
         {
-            GPIOC->ODR &=  ~(1<<3);  // PC3 set LO
-            GPIOC->DDR |=  (1<<3);
-            GPIOC->CR1 |=  (1<<3);
+            // floating phase, assert /SD A OFF and other two phase-legs enabled
+//            GPIOC->ODR &=  ~(1<<5);      // A.
+            GPIOC->ODR |=   (1<<7);
+            GPIOG->ODR |=   (1<<1);
         }
     }
 
-    if (DC_PWM_PLUS == state2 /* MINUS? */)
+    if (DC_OUTP_OFF != state1)
     {
-        TIM1_CCxCmd(TIM1_CHANNEL_4, ENABLE);
-        TIM1_SetCompare4(_set_output(2, state2));
-    }
-    else
-    {
-        TIM1_CCxCmd(TIM1_CHANNEL_4, DISABLE);
-
-        if (DC_OUTP_HI == state2)
+        if (DC_OUTP_FLOAT != state1)
         {
-            GPIOC->ODR |=  (1<<4);  // PC4 set HI
-            GPIOC->DDR |=  (1<<4);
-            GPIOC->CR1 |=  (1<<4);
+            GPIOG->ODR |=   (1<<7);     // set /SD B  On
+
+            if (DC_PWM_PLUS == state1 /* MINUS? */)
+            {
+                TIM1_SetCompare3(_set_output(1, state1));
+                TIM1_CCxCmd(TIM1_CHANNEL_3, ENABLE);
+                // set /SD B ON
+//        GPIOG->ODR |=   (1<<7);
+            }
+            else if (DC_OUTP_LO == state1)
+            {
+// let the Timer PWM channel remain disabled, PC3 set LO, set /SD B  On
+            }
         }
         else
         {
-            GPIOC->ODR &=  ~(1<<4);  // PC4 set LO
-            GPIOC->DDR |=  (1<<4);
-            GPIOC->CR1 |=  (1<<4);
+            // floating phase, assert /SD B OFF and other two phase-legs enabled
+            GPIOC->ODR |=   (1<<5);
+//            GPIOC->ODR &=   ~(1<<7);     // B
+            GPIOG->ODR |=   (1<<1);
+        }
+    }
+
+    if (DC_OUTP_OFF != state2)
+    {
+        if (DC_OUTP_FLOAT != state2)
+        {
+            GPIOG->ODR |=   (1<<1);     // set /SD C  On
+
+            if (DC_PWM_PLUS == state2 /* MINUS? */)
+            {
+                TIM1_SetCompare4(_set_output(2, state2));
+                TIM1_CCxCmd(TIM1_CHANNEL_4, ENABLE);
+                // set /SD C ON
+//        GPIOG->ODR |=   (1<<1);     // C
+            }
+            else if (DC_OUTP_LO == state2)
+            {
+// let the Timer PWM channel remain disabled, PC4 set LO, set /SD C  On
+            }
+        }
+        else
+        {
+            // floating phase, assert /SD C OFF and other two phase-legs enabled
+            GPIOC->ODR |=   (1<<5);
+            GPIOC->ODR |=   (1<<7);
+//            GPIOG->ODR &=   ~(1<<1);     // C
         }
     }
 
 // counterparts to Disable commands above
-    TIM1_Cmd(ENABLE);
     TIM1_CtrlPWMOutputs(ENABLE);
+    TIM1_Cmd(ENABLE);
 }
 
 
@@ -429,67 +525,41 @@ void BLDC_Step(void)
 
 /*
  * TODO: schedule at 30degree intervals? (see TIM3)
- *
- * BUG? if PWM pulse is on at the step time to transition to floating, the PWM 
- * pulse is not turned off with good timing as the voltage just bleeds off then
  */
 void bldc_move(COMMUTATION_SECTOR_t step )
 {
-/*
-    each comm. step, need to shutdown all PWM for the "hold off" period (flyback settling)
-*/
-//        PWM_set_outputs(0, 0, 0);
-
-// Start a short timer on which ISR will then  trigger the A/D with proper 
+// Start a short timer on which ISR will then  trigger the A/D with proper
 //  timing  .... at 1/4 of the comm. cycle ?
 // So this TIM3 would not stepp 6 times but 6x4 times? (4 times precision?)
 // ....... (yes seems necessary (refer to SiLabs appnote)
 
-
-// /SD outputs on C5, C7, and G1
     switch( step )
     {
     default:
+        PWM_set_outputs(DC_OUTP_OFF, DC_OUTP_OFF, DC_OUTP_OFF);
+        break;
 
     case 0: // SECTOR_1 etc.
-        GPIOC->ODR |=   (1<<5);      // A+-+
-        GPIOC->ODR |=   (1<<7);      // B---
-        GPIOG->ODR &=  ~(1<<1);      // C.
         PWM_set_outputs(DC_PWM_PLUS, DC_OUTP_LO, DC_OUTP_FLOAT);
         break;
 
     case 1:
-        GPIOC->ODR |=   (1<<5);	     // A+-+
-        GPIOC->ODR &=  ~(1<<7);      // B.
-        GPIOG->ODR |=   (1<<1);      // C---
         PWM_set_outputs(DC_PWM_PLUS, DC_OUTP_FLOAT, DC_OUTP_LO);
         break;
 
     case 2:
-        GPIOC->ODR &=  ~(1<<5);      // A.
-        GPIOC->ODR |=   (1<<7);      // B+-+
-        GPIOG->ODR |=   (1<<1);      // C---
         PWM_set_outputs(DC_OUTP_FLOAT, DC_PWM_PLUS, DC_OUTP_LO);
         break;
 
     case 3:
-        GPIOC->ODR |=   (1<<5);      // A---
-        GPIOC->ODR |=   (1<<7);      // B+-+
-        GPIOG->ODR &=  ~(1<<1);      // C.
         PWM_set_outputs(DC_OUTP_LO, DC_PWM_PLUS, DC_OUTP_FLOAT);
         break;
 
     case 4:
-        GPIOC->ODR |=   (1<<5);      // A---
-        GPIOC->ODR &=  ~(1<<7);      // B.
-        GPIOG->ODR |=   (1<<1);      // C+-+
         PWM_set_outputs(DC_OUTP_LO, DC_OUTP_FLOAT, DC_PWM_PLUS);
         break;
 
     case 5:
-        GPIOC->ODR &=  ~(1<<5);      // A.
-        GPIOC->ODR |=   (1<<7);      // B---
-        GPIOG->ODR |=   (1<<1);      // C+-+
         PWM_set_outputs(DC_OUTP_FLOAT, DC_OUTP_LO, DC_PWM_PLUS);
         break;
     }
