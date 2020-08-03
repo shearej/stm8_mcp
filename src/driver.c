@@ -60,7 +60,7 @@
 #define BLDC_OL_TM_HI_SPD          80  // end of ramp
 
 // 1 cycle = 6 * 8uS * 50 = 0.0024 S
-#define BLDC_OL_TM_MANUAL_HI_LIM   64 // stalls at ... 56 ? hi-enuff to manually 
+#define BLDC_OL_TM_MANUAL_HI_LIM   0x43 // what is it? humid day? ... 64 // stalls at ... 56 ? hi-enuff to manually 
                                       // advance to (and slightly past) "ideal" timing point
 
 // any "speed" setting higher than HI_LIM would be by closed-loop control of
@@ -267,18 +267,41 @@ void PWM_set_outputs(DC_PWM_STATE_t state0, DC_PWM_STATE_t state1, DC_PWM_STATE_
      *to allow back-EMF to "recover".
      */
 
-		 // stop PWM channels (but don't disable TIM1 yet so we can use the freerunning timer for de-mag delay
+// mark the start of commutation trigger
+#if 0
+    GPIOG->ODR |=  (1<<0); // tmp test
+#endif
+
+ // stop PWM channels (but don't disable TIM1 yet so we can use the freerunning timer for de-mag delay
     TIM1_CCxCmd(TIM1_CHANNEL_2, DISABLE);
     TIM1_CCxCmd(TIM1_CHANNEL_3, DISABLE);
     TIM1_CCxCmd(TIM1_CHANNEL_4, DISABLE);
     TIM1_CtrlPWMOutputs(DISABLE);
 
+// Better to delay here before transition to float (if PWM On) because letting 
+// the switch-OFF action of the '2104 does a better job to disipate flyback energy than the FB diode does!
+
+#if 1 // start of dead-time
+    GPIOG->ODR |=  (1<<0); // tmp test
+#endif
+
+#if 1
+    delay( 10 ); // with this delay, when the /SD is disbled and the phse is set
+// to float, there is now this big quick voltage spkke and rings out (< 5ms)
+// then tracks b-EMF ... which works pretty good!
+#endif
+
+#if 1 // end of dead-time
+    GPIOG->ODR &=  ~(1<<0); // tmp test
+#endif
+
+
     /*
      * When a phase is transitioned to Floating, then the other 2 IR2104s are enabled.
      *    This is where the "stepdown" of back-EMF occurs.
-     * DEFINATELY LAST THING TO DO before turning on the driving channel. ... .. no change of plan ... 
-		                ... the channel that is floating (about to be PWM) will "echo" 
-										   the comm. switch pulse, so FIRST (after stop PWM) set the driving channels to GND
+     * DEFINATELY LAST THING TO DO before turning on the driving channel.
+                ... the channel that is floating (about to be PWM) will "echo" 
+                    the comm. switch pulse, so FIRST (after stop PWM) set the driving channels to GND
 if a phase is floating up from low-drive, when the lower-switch turn off it flyback clamp to HV
  When the PWM on the upper-arm turn-off, the flyback is to clamp to GND so this is ideal discharge of flaoting coil.
  
@@ -293,7 +316,7 @@ if a phase is floating up from low-drive, when the lower-switch turn off it flyb
 
    if (DC_OUTP_FLOAT == state0)
     {
-            GPIOC->ODR &=  ~(1<<5);      // /SD A OFF 			
+            GPIOC->ODR &=  ~(1<<5);      // /SD A OFF 
         // other two legs have /SD enabled
 // /SD A OFF 
         GPIOC->ODR |=   (1<<7);
@@ -301,7 +324,7 @@ if a phase is floating up from low-drive, when the lower-switch turn off it flyb
     }
     else if (DC_OUTP_FLOAT == state1)
     {
-            GPIOC->ODR &=   ~(1<<7);     // /SD B OFF 			
+            GPIOC->ODR &=   ~(1<<7);     // /SD B OFF 
         // other two legs have /SD enabled
         GPIOC->ODR |=   (1<<5);
 // /SD B OFF 
@@ -309,18 +332,12 @@ if a phase is floating up from low-drive, when the lower-switch turn off it flyb
     }
     else if (DC_OUTP_FLOAT == state2)
     {
-            GPIOG->ODR &=   ~(1<<1);     // /SD C OFF 			
+            GPIOG->ODR &=   ~(1<<1);     // /SD C OFF 
         // other two legs have /SD enabled
         GPIOC->ODR |=   (1<<5);
         GPIOC->ODR |=   (1<<7);
 // /SD C OFF 
     }
-
-
-// mark the start of commutation trigger
-#if 0 //
-    GPIOG->ODR |=  (1<<0); // tmp test
-#endif
 
 
 #if 1 // can I put here ?????????????????????????? yes apparently so, with neither good or ill effect.
@@ -349,11 +366,8 @@ if a phase is floating up from low-drive, when the lower-switch turn off it flyb
     }
 #endif
 
-#if 1 // start of dead-time
-    GPIOG->ODR |=  (1<<0); // tmp test
-#endif
-#if 1
 
+#if 1
     /*
      * allow TIM1 freerunning counter to provide small delay to wait for back-emf voltage to settle, before setting
      * the other 2 phases /SD in the section below. See note above, the 
@@ -364,10 +378,9 @@ if a phase is floating up from low-drive, when the lower-switch turn off it flyb
 //    cntr = 60; // 42 uS ... good @45
 
 //    cntr = 70; // 46 uS scope triggers better @ 20uS ct@45
-
- cntr = 50; // 46 uS scope triggers better @ 20uS ct@45
-
-
+// cntr = 50 /* FLYBACK_DELAY */ ; // 46 uS scope triggers better @ 20uS ct@45
+ cntr = 30; 
+ 
     TIM1_SetCounter(cntr);
     while( cntr > 0 ) //  @ 8Mhz, 0.0000005 (1/2 uS)
     {
@@ -376,11 +389,18 @@ if a phase is floating up from low-drive, when the lower-switch turn off it flyb
     }
 #endif
 
+
+
+#if 0 // end of dead-time
+    GPIOG->ODR &=  ~(1<<0); // tmp test
+#endif
+
+
 // Finished with the counter, so disble TIM1 completely, prior to doing PWM reconfig
     TIM1_Cmd(DISABLE);
     TIM1_SetCounter(0);
 
-#if 1 // end of dead-time
+#if 0 // end of dead-time
     GPIOG->ODR &=  ~(1<<0); // tmp test
 #endif
 
@@ -472,6 +492,8 @@ if a phase is floating up from low-drive, when the lower-switch turn off it flyb
 }
 
 
+extern uint8_t OT_C_Thr;
+
 /*
  *
  */
@@ -479,6 +501,8 @@ void BLDC_Stop()
 {
     BLDC_State = BLDC_OFF;
     PWM_Set_DC( 0 );
+
+  OT_C_Thr = 8;  //   8 * 125us = 1ms
 }
 
 /*
@@ -486,6 +510,11 @@ void BLDC_Stop()
  */
 void BLDC_Spd_dec()
 {
+  if (OT_C_Thr > 8 ) // throttle = 0  @  8 * 125 uS = 1mS
+  {
+    OT_C_Thr -= 1;
+  }
+
     if (BLDC_OFF == BLDC_State)
     {
         BLDC_State = BLDC_RAMPUP;
@@ -503,6 +532,11 @@ void BLDC_Spd_dec()
  */
 void BLDC_Spd_inc()
 {
+  if (OT_C_Thr < (8 + 8)  ) // 16 * 125uS = 2mS
+  {
+    OT_C_Thr += 1;
+  }
+
     if (BLDC_OFF == BLDC_State)
     {
         BLDC_State = BLDC_RAMPUP;

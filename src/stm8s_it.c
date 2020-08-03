@@ -216,10 +216,46 @@ INTERRUPT_HANDLER(SPI_IRQHandler, 10)
   * @param  None
   * @retval None
   */
+uint8_t OT_C_Thr = 8  ; // 8 * 125us = 1ms
+uint8_t OT_20ms = 0; 
+
 INTERRUPT_HANDLER(TIM1_UPD_OVF_TRG_BRK_IRQHandler, 11)
 {
-   static uint8_t toggle;
+    static uint8_t OT_20ms = 0 ;
+    static uint8_t OT_count = 0;
+
+    static uint8_t toggle;
     toggle ^= 1; // tmp test 
+
+
+#if 1 // #ifdef TIM2_GPIO_TEST 
+if (0 == --OT_20ms ){
+
+// (re)set the pulse-count to enable the pulse
+  OT_count = 0;
+
+  OT_20ms = 160; // 20ms / 125us = 160
+}
+
+// every 20mS the pulse comes on ............
+
+// 1 of these should work?
+if (OT_count <   OT_C_Thr   ) // throttle range start at "0" i.e.  [8:16) ... (8 * 125uS = 1mS)
+{
+    OT_count += 1;
+    GPIOA->ODR |=  (1<<3);  // PA3
+    GPIOD->ODR |=  (1<<3);  // PD3
+    GPIOD->ODR |=  (1<<4);  // PD4
+} else {
+//	OT_count  = 0;
+    GPIOA->ODR &=  ~(1<<3);  // PA3
+    GPIOD->ODR &=  ~(1<<3);  // PD3
+    GPIOD->ODR &=  ~(1<<4);  // PD4	
+}
+
+#endif
+
+
 #if 1 // tmp test
     if (toggle){ 
         GPIOD->ODR |= (1 << LED);
@@ -334,7 +370,7 @@ INTERRUPT_HANDLER(TIM1_CAP_COM_IRQHandler, 12)
  INTERRUPT_HANDLER(TIM3_UPD_OVF_BRK_IRQHandler, 15)
 {
     static uint8_t toggle = 0;
-#if 1
+#if 0
     toggle ^= 1;
     if ( toggle ){
         GPIOG->ODR &= ~(1<<0);

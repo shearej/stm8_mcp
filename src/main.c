@@ -113,8 +113,8 @@ void GPIO_Config(void)
     GPIOC->DDR |=  (1<<6);
     GPIOC->CR1 |=  (1<<6);
 
-#if 0 // doesn't seem to matter ... these are set by TIM2 PWM API calls ??
-// 3 PWM Channels
+#if 1 // #ifdef TIM2_GPIO_TEST 
+// 1 of these should work?
 // T2.PWM.CH3
     GPIOA->ODR |=  (1<<3);  // PA3
     GPIOA->DDR |=  (1<<3);
