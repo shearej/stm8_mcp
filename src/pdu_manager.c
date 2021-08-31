@@ -39,7 +39,9 @@ static uint8_t data[MAX_RX_DATA_SIZE];
 
 /**
  * @brief Find SOF of Rx buffer
- *
+ * @details a data packet at this point has the following order: SOF -> Number of data bytes -> command to be executed -> data bytes -> checksum value
+ * @details Does this need an EOF?
+ * @return Either the index of the SOF in the Rx buffer or a value representing no frame found in buffer
 */
 
 static uint8_t Find_Frame(void)
@@ -58,7 +60,8 @@ static uint8_t Find_Frame(void)
 
 /**
  * @brief Reads data off Rx buffer and adds together checkSum
- *
+ * @details a data packet at this point has the following order: Number of data bytes -> command to be executed -> data bytes -> checksum value
+ * @return activeCheck represents the checksum of the data receieved
 */
 
 static uint8_t Read_Data(void)
@@ -87,7 +90,7 @@ static uint8_t Read_Data(void)
 
 /**
  * @brief Checksum data off Rx buffer
- *
+ * @details checks if the calculated checksum matches the checksum value sent over UART
 */
 
 static uint8_t Check_Data(uint8_t activeCheck)
@@ -104,7 +107,7 @@ static uint8_t Check_Data(uint8_t activeCheck)
 
 /**
  * @brief Handle Rx Buffer
- *
+ * @details This function is called outside ISR context and outside Periodic_Task() in attempt to keep the Rx buffer small
 */
 
 void Pdu_Manager_Handle_Rx(void)
@@ -117,7 +120,7 @@ void Pdu_Manager_Handle_Rx(void)
   if(NO_FRAME != frameLocation)
   {
     checkSum = Read_Data();
-    if(Check_Data(checkSum))  //return TRUE if good
+    if(Check_Data(checkSum))  //return TRUE if checksum is good
     {
       Driver_Clear_Rx_Buffer_Element(frameLocation);
     }
